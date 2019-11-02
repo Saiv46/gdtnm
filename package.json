@@ -1,0 +1,39 @@
+{
+  "name": "gdtnm",
+  "version": "1.0.0",
+  "description": "Nepethe Multiplayer Server",
+  "main": "./src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node --experimental-modules index.js",
+    "jsdoc": "jsdoc src -r -d docs"
+  },
+  "keywords": [],
+  "author": "Saiv46",
+  "license": "MIT",
+  "dependencies": {
+    "debug": "^4.1.1",
+    "nat-upnp": "^1.1.1",
+    "websocket": "^1.0.30"
+  },
+  "devDependencies": {
+    "eslint": "6.6.0",
+    "eslint-plugin-prettier": "^3.1.1",
+    "husky": "^3.0.9",
+    "jsdoc": "^3.6.3",
+    "lint-staged": "^9.4.2",
+    "prettier": "1.18.2"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix",
+      "git add"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+	"standalone": true,
+	"origin": {
+		"host": "0.0.0.0",
+		"port": 1080
+	},
+	"gameplay": {
+		"motd": "GDTMP-compatible Server",
+		"description": "GDTMP-compatible Server",
+		"timesync": false,
+		"syncconsoles": false,
+		"offlineconsoles": false,
+		"reviewbattle": false,
+		"serversidesave": true
+	},
+	"users": {
+		"banned": [],
+		"opped": []
+	}
+}
