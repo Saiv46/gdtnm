@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>JSDoc: Source: datastore.js</title>
+    <title>JSDoc: Source: plugin.js</title>
 
     <script src="scripts/prettify/prettify.js"> </script>
     <script src="scripts/prettify/lang-css.js"> </script>
@@ -17,7 +17,7 @@
 
 <div id="main">
 
-    <h1 class="page-title">Source: datastore.js</h1>
+    <h1 class="page-title">Source: plugin.js</h1>
 
     
 
@@ -26,59 +26,51 @@
     
     <section>
         <article>
-            <pre class="prettyprint source linenums"><code>import { promisify } from "util";
-import { readFile, writeFile } from "fs";
-
-class FileStore {
-	constructor(name) {
-		this.filename = name;
-		this.data = {};
-	}
-	async load() {
-		try {
-			this.data = JSON.parse(await promisify(readFile)(this.filename, "utf8"));
-			return true;
-		} catch (e) {
-			if (e.code === "ENOENT") {
-				await this.save();
-				return false;
-			}
-			throw e;
-		}
-	}
-	async save() {
-		await promisify(writeFile)(this.filename, JSON.stringify(this.data), "utf8");
-		return true;
-	}
-}
-const inst = new FileStore("./playerData.json");
-let loaded = false;
-inst.load().then(() => { loaded = true });
-
-/**
- * In-memory datastore
+            <pre class="prettyprint source linenums"><code>/**
+ * All third-party plugins must extend this class
  */
-export class nDataStore {
+export class nPlugin {
+	/** @type {String} */
+	static get id() { return "base_plugin" }
+
 	/**
-	 * Loads data
-	 * @param {String} id 
-	 * @returns {?Object}
+	 * @constructor
+	 * @param {nServer} server Server instance
 	 */
-	static async load(id) {
-		if (!loaded) await inst.load();
-		return inst.data[id];
+	constructor(server) {
+		this.server = server;
 	}
+
 	/**
-	 * Saves data
-	 * @param {String} id 
-	 * @param {Object} data 
+	 * Called on client connect
+	 * @param {nClient} client
 	 */
-	static async save(id, data) {
-		inst.data[id] = data;
-		return await inst.save();
-	}
+	onClientAdded(client) {}
+	/** 
+	 * Called on client join
+	 * @param {nClient} client
+	*/
+	onClientJoined(client) {}
+	/** 
+	 * Called on client disconnect
+	 * @param {nClient} client
+	*/
+	onClientRemoved(client) {}
+	/** 
+	 * Called on plugin de-registration
+	 * This method should clean up event listeners and free some memory.
+	 */
+	onDestroy() {}
+	/** @param {Object} data JSON object */
+	fromJSON(data) {}
+	/** @param {String} data JSON string */
+	fromString(data) { return this.fromJSON(JSON.parse(data)) }
+	/** @returns {Object} JSON object */
+	toJSON() { return {} }
+	/** @returns {String} JSON string */
+	toString() { return JSON.stringify(this) }
 }
-export default nDataStore;
+export default nPlugin;
 </code></pre>
         </article>
     </section>

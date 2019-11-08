@@ -3,6 +3,7 @@ import { deflateSync, inflateSync } from "zlib";
 
 import nLogger from "./logger.js";
 import nDatastore from "./datastore.js";
+import nPlayerData from "./playerData.js";
 
 /**
  * GDTNM protocol version
@@ -10,92 +11,86 @@ import nDatastore from "./datastore.js";
  */
 export const PROTOCOL_VERSION = 1;
 /**
- * Compatible GDTMP version
+ * Compatible GDTMP server version
  * @memberof nClient
  */
 export const LEGACY_SERVERVERSION = "1.5.5.0";
-export const LEGACY_SERVERID = "133333337";
+/**
+ * Minimal GDTMP client version
+ * @memberof nClient
+ */
+export const LEGACY_MINVERSION = "0.5.11";
+export const LEGACY_SERVERID = 133333337;
 export const LEGACY_SEPARATOR = "\xFA";
 export const LEGACY_SEPARATOR2 = "\xFB";
 export const LEGACY_SEPARATOR3 = "\xFC";
 export const LEGACY_SEPARATOR4 = "\xFD";
 
 /**
- * Stores and serializes player data
- */
-export class nPlayerData {
-	/**
-	 * @prop {Number} [AvgCosts=-1]
-	 * @prop {Number} [AvgIncome=-1]
-	 * @prop {Number} [AvgScore=-1]
-	 * @prop {Object} [Boss=null]
-	 * @prop {Number} [Cash=-1]
-	 * @prop {Number} [CurrentWeek=-1]
-	 * @prop {Number} [Employees=-1]
-	 * @prop {Number} [Fans=-1]
-	 * @prop {String} [FavouriteGenre=null]
-	 * @prop {Number} [GameCount=-1]
-	 * @prop {Number} [HighScore=-1]
-	 * @prop {Number} [PlatformCount=-1]
-	 * @prop {Number} [ResearchPoints=-1]
-	 * @prop {Boolean} [Op=false]
-	 * @prop {String} [Name=null]
-	 */
-	constructor() {
-		// Default variables from GDTMP
-		this.AvgCosts = -1;
-		this.AvgIncome = -1;
-		this.AvgScore = -1;
-		this.Boss = null;
-		this.Cash = -1;
-		this.CurrentWeek = -1;
-		this.Employees = -1;
-		this.Fans = -1;
-		this.FavouriteGenre = null;
-		this.GameCount = -1;
-		this.HighScore = -1;
-		this.PlatformCount = -1;
-		this.ResearchPoints = -1;
-		this.Op = false;
-		this.Name = null;
-	}
-	/**
-	 * Serialize to JSON
-	 * @returns {Object}
-	 */
-	toJSON() { return Object.assign({}, this) }
-	/**
-	 * Unserialize from JSON 
-	 * @param {Object} data Unserialized object
-	 * @returns {nPlayerData}
-	 */
-	static fromJSON(data) { return Object.assign(new nPlayerData, data) }
-}
-
-/**
  * Client instance
+ * 
+ * - Internal events is prefixed with "@"
+ * - Non-standard packet IDs are prefixed with "X"
  */
 export class nClient extends EventEmitter {
 	/**
-	 * Fires when instance ready
+	 * Client instance connected
 	 * @event nClient#@open
 	 * @prop {WebSocketConnection} socket
 	 *//**
-	 * Fires on socket d1isconnect
+	 * Client joined
+	 * @event nClient#@join
+	 *//**
+	 * Client disconnected
 	 * @event nClient#@close
 	 * @prop {WebSocketConnection} socket
 	 *//**
+	 * Recieved raw packet
+	 * @event nClient#@raw
+	 * @prop {?String} utf8Data If legacy packet
+	 * @prop {?Buffer} binaryData Otherwise
+	 *//**
 	 * @prop {Number} id Session ID
 	 * @prop {Number} code Authentication code
+	 * @prop {Boolean} joined Is client playing (false if kicked)
 	 * @prop {Boolean} legacyMode Disable GDTMP-incompatible features
 	 * @prop {Set} mods Set of client mods
 	 * @prop {nPlayerData} data Player game data
 	 *//**
+	 * Client ID request
 	 * @event nClient#REQID
 	 * @type {String[]}
 	 * @prop {String} code
 	 * @prop {String} version
 	 * @prop {String} mods
+	 *//**
+	 * Client company info
+	 * @event nClient#COMPANY
+	 * @type {String[]}
+	 * @prop {String} name
+	 * @prop {String} boss
+	 * @prop {String} cash
+	 * @prop {String} fans
+	 * @prop {String} rp
+	 * @prop {String} week
+	 * @prop {String} employees
+	 * @prop {String} platformcount
+	 * @prop {String} gamecount
+	 * @prop {String} favouritegenre
+	 * @prop {String} avgcosts
+	 * @prop {String} avgincome
+	 * @prop {String} avgscore
+	 * @prop {String} highscore
+	 * @prop {?String} meta
+	 *//**
+	 * [X] Client Nepethe protocol switch
+	 * @event nClient#XNM
+	 * @type {String[]}
+	 *//**
+	 * [X] Raw Nepethe protocol data
+	 * @event nClient#XDAT
+	 * @type {String[]}
+	 * @prop {String} data Compressed JSON
 	 */
 	/**
 	 * Client IP address
@@ -115,33 +110,47 @@ export class nClient extends EventEmitter {
 	constructor(socket) {
 		super();
 		
-		this.id = Math.ceil(Math.exp(Math.random() ** Math.random()) * 1e14);
+		this.id = Math.ceil(Math.exp(Math.random() ** Math.random()) * 1e8);
 		this.code = null;
+		this.joined = false;
 		this.legacyMode = true;
 		
 		this.mods = new Set();
 		this.data = new nPlayerData();
 		
-		this.logger = new nLogger("client");
-		this._logger = new nLogger("socket");
+		this.logger = new nLogger("client").bind(this, `[${this.id.toString(16)}]`);
+		this._logger = new nLogger("socket").bind(this, `[${this.id.toString(16)}]`);
 		this._socket = socket;
 		
 		/// onMessage
 		socket.on("message", ({ type, utf8Data, binaryData }) => {
-			this._logger(`[${this.id.toString(16)}] Recieved ${binaryData ? binaryData.length : utf8Data.length} length data`);
 			this.emit("@raw", utf8Data, binaryData);
+			let id, data;
 			if (type === "binary") {
-				const { id = "XDAT", ...data } = JSON.parse(inflateSync(binaryData));
-				this.emit(id, data);
+				const flags = binaryData[0];
+				let data = binaryData.slice(1);
+				if (flags & 0b10) { data = inflateSync(data) }
+				data = JSON.parse(data);
+				id = data.id;
+				data = data.data;
 			} else {
-				const [ id, ...arr ] = utf8Data.split(LEGACY_SEPARATOR);
-				this.emit(id, arr);
+				const fromString = (str, sep) =>
+					(str = str.split(sep[0])).length > 1
+					? str.map(v => (sep.shift(), fromString(v, sep)))
+					: str;
+				[ id, ...data ] = fromString(utf8Data, [
+					LEGACY_SEPARATOR,
+					LEGACY_SEPARATOR3,
+					LEGACY_SEPARATOR2
+				]);
 			}
+			this._logger(`Recieved data: ID = ${id}, DATA = ${data}`);
+			this.emit(id, data);
 		});
 
 		/// onClose
 		socket.on("close", () => {
-			this.logger(`[${this.id.toString(16)}] Client disconnected`);
+			this.logger("Client disconnected");
 			this.emit("@close");
 			this._socket = null;
 			this.save();
@@ -151,7 +160,7 @@ export class nClient extends EventEmitter {
 		// Standard authentication
 		this.on("REQID", (data) => {
 			const [ code, version, mods ] = data;
-			if (data.length < 3 || version < LEGACY_SERVERVERSION) {
+			if (data.length < 3 || version < LEGACY_MINVERSION) {
 				this.kick("You're running an old version of GDTMP. Please update.");
 				return;
 			}
@@ -161,25 +170,24 @@ export class nClient extends EventEmitter {
 			}
 			this.code = +code;
 			this.load();
-			this.sendLegacy("YOURID", code, this.id, LEGACY_SERVERID);
-			for (const modEntry in mods.split(LEGACY_SEPERATOR3).filter(String)) {
-				const [id, name] = modEntry.map(v => v.split(LEGACY_SEPARATOR2));
-				if (id && name) this.mods.add({ id, name });
+			this.sendLegacy("YOURID", [ code, this.id ]);
+			mods
+				.filter(v => v.length === 2)
+				.forEach(([id, name]) => this.mods.add({ id, name }));
+		});
+		// Company info update
+		this.on("COMPANY", (data) => {
+			if (data.length < 14) return;
+			this.data.fromLegacy(data);
+			if (!this.joined && data[14] === "join") {
+				this.joined = true;
+				this.emit("@join");
 			}
 		});
 
 		/// XNM
-		// Non-standard packets ID prefixed with "X"
 		this.sendLegacy("XNM", PROTOCOL_VERSION);
-		this.on("XNM", ([proto]) => {
-			if (PROTOCOL_VERSION > +proto) {
-				this.sendChat(`Outdated GDTNM protocol version, server running on ${PROTOCOL_VERSION}.`);
-			} else if((+proto).toFixed() > PROTOCOL_VERSION.toFixed()) {
-				this.sendChat(`Incompatible GDTNM protocol version, server still on ${PROTOCOL_VERSION}.`);
-			} else {
-				this.legacyMode = false;
-			}
-		});
+		this.on("XNM", () => (this.legacyMode = false));
 
 		this.emit("@open", this._socket);
 	}
@@ -191,55 +199,92 @@ export class nClient extends EventEmitter {
 	 */
 	kick(reason = "You've been kicked from the server.") {
 		if (!this.online) return;
-		this.logger(`Client ${this.ip} (${this.id}) kicked with reason "${reason}"`);
-		this.sendLegacy("KICK", reason, LEGACY_SERVERID);
+		this.joined = false;
+		this.logger(`Kicked with reason: "${reason}"`);
+		this.sendLegacy("KICK", reason);
 		this._socket.close();
 	}
 	
 	/**
 	 * Sends message to client
-	 * @param {String} sender Sender name
+	 * @param {Number} sender Sender ID
 	 * @param {String} msg Message
+	 * @param {Object} [opt={}] Message metadata
+	 * @param {Boolean} [opt.priv=false] Display message as private
+	 * @param {Boolean} [opt.op=false] Display sender as OP
 	 *//**
 	 * Sends message to client
 	 * @param {String} msg Message
 	 */
-	sendChat(sender, msg) {
-		msg = (msg ? (sender ? `<${sender}> ${msg}` : msg) : sender).trim();
-		sendLegacy("MSG", msg);
+	sendChat(sender, msg, opt = {}) {
+		if (msg === undefined) {
+			msg = sender;
+			sender = LEGACY_SERVERID;
+		}
+		msg = msg.replace(/[\xFA-\xFD]+/g, "").trim();
+		if (msg === "") return;
+		sendLegacy(
+			opt.priv ? "PRIVMSG" : "MSG",
+			(!opt.priv && opt.op) ? [msg, true] : msg,
+			sender
+		);
 	}
 	
 	/**
 	 * Sends JSON data to client
-	 * @param {Object} data JSON-serializable data
+	 * @param {String} id Packet ID
+	 * @param {*} data Serializable data
+	 * @param {Object} [opts={}] Serialization options
+	 * @param {?String} [opts.source=LEGACY_SERVERID] Packet sender ID
+	 * @param {?Boolean} [opts.compress=true] Compress data
+	 * @param {?Boolean} [opts.legacy=false] Mark packet as legacy
 	 */
-	send(data) {
+	send(id, data, opts = {}) {
 		if (!this.online) return;
-		data = JSON.stringify(data);
-		if (this.legacyMode) {
-			return this.sendLegacy("XDAT", data);
+		const {
+			source = LEGACY_SERVERID,
+			compress = true,
+			legacy = false
+		} = opts;
+		if (this.legacyMode && legacy) {
+			return this.sendLegacy(id, JSON.stringify(data), source);
 		}
-		this._logger(`Sent data JSON: ${data}`);
-		this._socket.sendBinary(deflateSync(data));
+		data = JSON.stringify({ id, data, source });
+		if (compress) { data = deflateSync(data) }
+		const flags = 0
+			| (compress && 0b10)
+			| (legacy && 0b100);
+		if (this.legacyMode) {
+			return this.sendLegacy("XDAT", String.fromCharCode(flags) + data.toString("utf8"));
+		}
+		this._socket.sendBinary(Buffer.from([ flags ]), data);
+		this._logger(`Sent data: FLAGS = 0b${flags.toString(2)}, LENGTH = ${data.length}`);
 	}
 
 	/**
 	 * Sends packet to client
 	 * @param {String} id Packet ID
-	 * @param {Array.<String|Number|Boolean>} data Serialized data
+	 * @param {*} [data=[]] Serializable data
+	 * @param {Number} [source=LEGACY_SERVERID] Packet sender ID
 	 */
-	sendLegacy(id, ...data) {
-		if (!this.online || !id) return;
+	sendLegacy(id, data = [], source = LEGACY_SERVERID) {
+		if (!this.online) return;
 		if (!this.legacyMode) {
-			return this.send({ id, data });
+			return this.send(id, data, { source, legacy: true });
 		}
-		data.push(LEGACY_SERVERID);
-		this._logger(`Sent (legacy) data: ID = ${id}, DATA = ${data}`);
+		const toString = (arr, sep) => 
+			Array.isArray(arr) 
+			? arr.map(v => (sep.shift(), toString(v, sep))).join(sep[0])
+			: arr.toString();
 		this._socket.sendUTF(
-			id + data
-			.map(v => v.toString().replace(/\xFA/g, '\\xFA'))
-			.join(LEGACY_SEPARATOR)
+			id + toString(data, [
+				LEGACY_SEPARATOR,
+				LEGACY_SEPARATOR4,
+				LEGACY_SEPARATOR2,
+				LEGACY_SEPARATOR3
+			]) + LEGACY_SEPARATOR + source.toString()
 		);
+		this._logger(`Sent (legacy) data: ID = ${id}, SOURCE = ${source}, DATA = ${data}`);
 	}
 	
 	/**
@@ -253,10 +298,12 @@ export class nClient extends EventEmitter {
 	async load() {
 		if (!this.code) return;
 		const data = await nDatastore.load(this.code);
-		if (data) this.data = nPlayerData.fromJSON(data);
+		if (data) {
+			this.data = nPlayerData.fromJSON(data);
+			this.sendLegacy("SAVEDATA", JSON.stringify(this.data));
+		}
 		this.emit("@load", this.data);
 		this.logger(
-			`[${this.id.toString(16)}] `+
 			(data ? "Loaded player data" : "No player data found")+
 			` (code - ${this.code})`
 		);
@@ -273,13 +320,12 @@ export class nClient extends EventEmitter {
 	async save() {
 		if (!this.code) return;
 		this.emit("@save", this.data);
+		const result = await nDatastore.save(this.code, this.data.toJSON());
+		if (!result) {
+			this.sendLegacy("SAVEFAIL");
+		}
 		this.logger(
-			`[${this.id.toString(16)}] `+
-			(
-				await nDatastore.save(this.code, this.data.toJSON())
-				? "Saved player data"
-				: "Failed to save player data"
-			)+
+			(result ? "Saved player data" : "Failed to save player data")+
 			` (code - ${this.code})`
 		);
 	}

@@ -27,11 +27,18 @@
     <section>
         <article>
             <pre class="prettyprint source linenums"><code>import { createServer } from "http";
+import { promisify, inherits } from "util";
 import EventEmitter from "events";
 import WebSocket from "websocket";
 
-import nClient, { PROTOCOL_VERSION, LEGACY_SERVERVERSION } from "./client.js";
-import { nLogger } from "./logger.js";
+import nClient, {
+	PROTOCOL_VERSION,
+	LEGACY_SERVERID,
+	LEGACY_MINVERSION,
+	LEGACY_SERVERVERSION
+} from "./client.js";
+import nLogger from "./logger.js";
+import nPlugin from "./plugin.js";
 import nNAT from "./nat.js";
 import nException from "./exception.js";
 
@@ -41,24 +48,31 @@ const version = 1.0;
  * Server instance
  */
 export class nServer extends EventEmitter {
-	// Configuration
-	static BACKUPFOLDER = "old";
-	static BANNEDIPSFILE = "bannedips.txt";
-	static CLIENTSAVEFOLDER = "clients";
-	static CONFIGFOLDER = "config";
-	static CUSTOMSETTINGSFILE = "customsettings.txt";
-	static ENABLEDEXTENSIONSFILE = "extensions.txt";
-	static ENABLEDPLUGINSFILE = "plugins.txt";
-	static EXTENSIONFOLDER = "extensions";
-	static MINVERSION = "0.5.1";
-	static OPPEDIPSFILE = "oppedips.txt";
-	static PLUGINFOLDER = "plugins";
-	static PRIVATESETTINGSFILE = "privatesettings.txt";
-	static SERVERVERSION = "1.5.5.0";
-	static SETTINGSFILE = "settings.txt";
-	static STARTUPMACROFILE = "startup.txt";
+	/**
+	 * Player connected
+	 * @event nServer#playerAdded
+	 * @prop {nClient} client
+	 *//**
+	 * Player joined to game
+	 * @event nServer#playerJoined
+	 * @prop {nClient} client
+	 *//**
+	 * Player disconnect
+	 * @event nServer#playerRemoved
+	 * @prop {nClient} client
+	 *//**
+	 * Server initializated and started
+	 * @event nServer#serverStarted
+	 * @prop {nServer} self
+	 *//**
+	 * Server stopped and de-initializated
+	 * @event nServer#serverStopped
+	 * @prop {nServer} self
+	 */
+
 	/**
 	 * Default configuration
+	 * @returns {Object}
 	 */
 	static get DefaultConfig() {
 		return {
@@ -69,14 +83,15 @@ export class nServer extends EventEmitter {
 				keepalive: true
 			},
 			gameplay: {
-				motd: "GDTMP-compatible Server",
-				description: "GDTMP-compatible Server",
+				motd: "GDTMP-compatible server",
+				description: "GDTMP-compatible server",
 				timesync: false,
 				syncconsoles: false,
 				offlineconsoles: false,
 				syncconsoles: false,
 				reviewbattle: false,
-				serversidesave: true
+				serversidesave: true,
+				cheatmodallowed: false
 			},
 			users: {
 				banned: [],
@@ -93,6 +108,7 @@ export class nServer extends EventEmitter {
 		super();
 		/// Init variables
 		this.clients = new Set();
+		this.plugins = new Set();
 		this.http = null;
 		this.server = null;
 		this.config = Object.assign(nServer.DefaultConfig, config, { version });
@@ -106,15 +122,16 @@ export class nServer extends EventEmitter {
 	async init() {
 		if (this._init) return;
 		this._init = true;
-		this.logger("Initializating server...");
+		this.logger("Server initializating...");
 		const {
 			origin: { host, port, keepalive },
-			gameplay: { motd, description }
+			gameplay
 		} = this.config;
 		if (!this.server &amp;&amp; !this.http) {
-			const server = createServer((req, res) => {
-				response.writeHead(200, {"Content-Type": "application/json"});
-				response.end(JSON.stringify({
+			const { motd, description } = gameplay;
+			const server = createServer((_, res) => {
+				res.writeHead(200, {"Content-Type": "application/json"});
+				res.end(JSON.stringify({
 					agent: `GDTMP/${LEGACY_SERVERVERSION} Nepenthe/${PROTOCOL_VERSION}`,
 					status: "running",
 					motd,
@@ -131,7 +148,7 @@ export class nServer extends EventEmitter {
 					throw new nException("Failed to launch HTTP(S) server", e);
 				}
 			});
-			server.listen(port, host);
+			await promisify(server.listen).call(server, port, host, 511);
 			this.http = server;
 			this.logger(`HTTP server running on ${host}:${port}`);
 		}
@@ -150,17 +167,7 @@ export class nServer extends EventEmitter {
 			});
 			this.logger(`WebSocket server running on ${host}:${port}`);
 		}
-		
-		/**
-		 * CLIENT EVENT CYCLE:
-		 * 
-		 * clientAdded &lt;- Connected
-		 *     \|/
-		 * clientJoined &lt;- Authenticated
-		 *     \|/
-		 * clientRemoved &lt;- Disconnected
-		 * 
-		 */
+
 		this.server.on("connect", socket => {
 			const client = new nClient(socket);
 			this.emit("clientAdded", client);
@@ -168,21 +175,101 @@ export class nServer extends EventEmitter {
 			
 			client.on("REQID", () => {
 				client.sendLegacy("SETTINGS", 
-					SERVERVERSION,
+					LEGACY_SERVERVERSION,
 					gameplay.timesync,
 					gameplay.syncconsoles,
 					gameplay.offlineconsoles,
 					gameplay.reviewbattle,
-					gameplay.serversidesave
+					gameplay.serversidesave,
+					LEGACY_SERVERID
 				);
-				this.emit("clientJoined", client);
+			});
+			client.on("POLL", () => {
+				client.sendLegacy(
+					"POLLRES",
+					this.clients.size - 1,
+					gameplay.cheatmodallowed,
+					LEGACY_MINVERSION,
+					gameplay.description,
+					LEGACY_SERVERVERSION,
+					LEGACY_SERVERID
+				);
+				client.kick("poll");
 			});
 
+			client.on("@join", () => this.emit("clientJoined", client));
 			client.on("@close", () => {
 				this.emit("clientRemoved", client);
 				this.clients.delete(client);
 			});
 		});
+
+		this.logger("Server started!");
+		this.emit("serverStarted", this);
+	}
+	/**
+	 * Stops server
+	 */
+	async stop() {
+		if (!this._init) return;
+		this.logger("Server shutting down...");
+		this.server.shutDown();
+		this.server = null;
+		this.logger("WebSocket server closed");
+		await promisify(this.http.close).call(this.http);
+		this.http = null;
+		this.logger("HTTP server closed");
+		if (this.clients.size) {
+			this.logger("Closing client connections");
+			this.clients.forEach(v => v._socket.close());
+		}
+		this._init = false;
+		this.logger("Server stopped!");
+		this.emit("serverStopped", this);
+	}
+	/**
+	 * Register server plugin
+	 * @param {nPlugin} plugin Plugin class
+	 */
+	register(plugin) {
+		try {
+			this.unregister(plugin);
+		} catch (e) {
+			if (!(e instanceof nException)) { throw e }
+		}
+		const inst = new plugin(this);
+		if (!(inst instanceof nPlugin)) {
+			throw new nException("Plugin class must extend nPlugin");
+		}
+		inst[Symbol.for("nPlugin")] = plugin;
+		this.setMaxListeners(this.getMaxListeners() + 1);
+		this.on("clientAdded", inst.onClientAdded);
+		this.on("clientJoined", inst.onClientJoined);
+		this.on("clientRemoved", inst.onClientRemoved);
+		this.plugins.add(inst);
+	}
+	/**
+	 * Register server plugin
+	 * @param {nPlugin} plugin Plugin class
+	 */
+	unregister(plugin) {
+		let inst;
+		for (const target in this.plugins) {
+			if (target[Symbol.for("nPlugin")] === plugin) {
+				inst = target;
+				break;
+			}
+		}
+		if (!inst) {
+			throw new nException("Plugin instance not found");
+		}
+		inst.onDestroy();
+		this.off("clientAdded", inst.onClientAdded);
+		this.off("clientJoined", inst.onClientJoined);
+		this.off("clientRemoved", inst.onClientRemoved);
+		this.setMaxListeners(this.getMaxListeners() - 1);
+		this.plugins.delete(inst);
+		inst[Symbol.for("nPlugin")] = undefined;
 	}
 }
 export default nServer;
@@ -196,13 +283,13 @@ export default nServer;
 </div>
 
 <nav>
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="nClient.html">nClient</a></li><li><a href="nDataStore.html">nDataStore</a></li><li><a href="nException.html">nException</a></li><li><a href="nLogger.html">nLogger</a></li><li><a href="nNAT.html">nNAT</a></li><li><a href="nPlayerData.html">nPlayerData</a></li><li><a href="nServer.html">nServer</a></li></ul><h3>Events</h3><ul><li><a href="nClient.html#event:@close">@close</a></li><li><a href="nClient.html#event:@load">@load</a></li><li><a href="nClient.html#event:@open">@open</a></li><li><a href="nClient.html#event:@save">@save</a></li><li><a href="nClient.html#event:REQID">REQID</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="nClient.html">nClient</a></li><li><a href="nDataStore.html">nDataStore</a></li><li><a href="nException.html">nException</a></li><li><a href="nLogger.html">nLogger</a></li><li><a href="nNAT.html">nNAT</a></li><li><a href="nPlayerData.html">nPlayerData</a></li><li><a href="nPlugin.html">nPlugin</a></li><li><a href="nServer.html">nServer</a></li></ul><h3>Events</h3><ul><li><a href="nClient.html#event:@close">@close</a></li><li><a href="nClient.html#event:@join">@join</a></li><li><a href="nClient.html#event:@load">@load</a></li><li><a href="nClient.html#event:@open">@open</a></li><li><a href="nClient.html#event:@raw">@raw</a></li><li><a href="nClient.html#event:@save">@save</a></li><li><a href="nClient.html#event:COMPANY">COMPANY</a></li><li><a href="nClient.html#event:REQID">REQID</a></li><li><a href="nClient.html#event:XDAT">XDAT</a></li><li><a href="nClient.html#event:XNM">XNM</a></li><li><a href="nServer.html#event:playerAdded">playerAdded</a></li><li><a href="nServer.html#event:playerJoined">playerJoined</a></li><li><a href="nServer.html#event:playerRemoved">playerRemoved</a></li><li><a href="nServer.html#event:serverStarted">serverStarted</a></li><li><a href="nServer.html#event:serverStopped">serverStopped</a></li></ul>
 </nav>
 
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.3</a> on Sat Nov 02 2019 20:41:09 GMT+0800 (GMT+08:00)
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.3</a> on Thu Nov 07 2019 14:34:29 GMT+0800 (GMT+08:00)
 </footer>
 
 <script> prettyPrint(); </script>

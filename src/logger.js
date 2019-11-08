@@ -5,10 +5,10 @@ import Debug from "debug";
  */
 export class nLogger extends Debug {
 	/**
-	 * @param {String} name Be prefixed by "gdtnm:"
+	 * @param {?String} name
 	 */
 	constructor(name) {
-		super(`gdtnm:${name}`)
+		super(name ? `gdtnm:${name}` : "gdtnm")
 	}
 }
 export default nLogger;
