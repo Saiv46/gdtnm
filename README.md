@@ -14,6 +14,8 @@ Or `require()` this package and make server on your own.
 ## When?
 - Alpha: 12/19
 - Beta: 03/20
+- Release: Never
+
 
 ## Features
 ### Implemented
