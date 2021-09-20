@@ -47,8 +47,8 @@ export class nClient extends EventEmitter {
 	 *//**
 	 * Recieved raw packet
 	 * @event nClient#@raw
-	 * @prop {?String} utf8Data If legacy packet
-	 * @prop {?Buffer} binaryData Otherwise
+	 * @prop {Boolean} [isLegacy=true] Is packet a text
+	 * @prop {String|Buffer} data Packet contents
 	 *//**
 	 * @prop {Number} id Session ID
 	 * @prop {Number} code Authentication code
@@ -124,25 +124,26 @@ export class nClient extends EventEmitter {
 		
 		/// onMessage
 		socket.on("message", ({ type, utf8Data, binaryData }) => {
-			this.emit("@raw", utf8Data, binaryData);
+			const isLegacy = type !== "binary";
+			this.emit("@raw", isLegacy, isLegacy ? utf8Data : binaryData);
 			let id, data;
-			if (type === "binary") {
+			if (isLegacy) {
+				const fromString = (str, sep) =>
+					(str = str.split(sep[0])).length > 1
+						? str.map(v => (sep.shift(), fromString(v, sep)))
+						: str;
+				[ id, ...data ] = fromString(utf8Data, [
+					LEGACY_SEPARATOR,
+					LEGACY_SEPARATOR3,
+					LEGACY_SEPARATOR2
+				]);
+			} else {
 				const flags = binaryData[0];
 				let data = binaryData.slice(1);
 				if (flags & 0b10) { data = inflateSync(data) }
 				data = JSON.parse(data);
 				id = data.id;
 				data = data.data;
-			} else {
-				const fromString = (str, sep) =>
-					(str = str.split(sep[0])).length > 1
-					? str.map(v => (sep.shift(), fromString(v, sep)))
-					: str;
-				[ id, ...data ] = fromString(utf8Data, [
-					LEGACY_SEPARATOR,
-					LEGACY_SEPARATOR3,
-					LEGACY_SEPARATOR2
-				]);
 			}
 			this._logger(`Recieved data: ID = ${id}, DATA = ${data}`);
 			this.emit(id, data);
