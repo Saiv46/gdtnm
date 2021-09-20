@@ -5,15 +5,12 @@ import WebSocket from "websocket";
 
 import nClient, {
 	PROTOCOL_VERSION,
-	LEGACY_MINVERSION,
 	LEGACY_SERVERVERSION
 } from "./client.js";
 import nLogger from "./logger.js";
 import nPlugin from "./plugin.js";
 import nNAT from "./nat.js";
 import nException from "./exception.js";
-
-const version = 1.0;
 
 /**
  * Server instance
@@ -75,25 +72,17 @@ export class nServer extends EventEmitter {
 	 * Constructs server instance
 	 * @param {Object} config Configuration to use
 	 */
-	constructor(config) {
+	constructor(config = nServer.DefaultConfig) {
 		super();
 		/// Init variables
 		this.clients = new Set();
 		this.plugins = new Set();
 		this.http = null;
 		this.server = null;
-		this._config = nServer.DefaultConfig;
-		if (config) { this.config = config }
+		this.config = config;
 		/// Init critical components
 		this.nat = new nNAT();
 		this.logger = new nLogger("server");
-	}
-	get config() { return this._config; }
-	/**
-	 * 
-	 */
-	set config(value = nServer.DefaultConfig) {
-		this._config = Object.assign(this._config, value);
 	}
 	/**
 	 * Initializes server
@@ -104,10 +93,9 @@ export class nServer extends EventEmitter {
 		this.logger("Server initializating...");
 		const {
 			origin: { host, port, keepalive },
-			gameplay
+			gameplay: { motd, description }
 		} = this.config;
 		if (!this.server && !this.http) {
-			const { motd, description } = gameplay;
 			const server = createServer((_, res) => {
 				res.writeHead(200, {"Content-Type": "application/json"});
 				res.end(JSON.stringify({
@@ -151,28 +139,6 @@ export class nServer extends EventEmitter {
 			const client = new nClient(socket);
 			this.emit("clientAdded", client);
 			this.clients.add(client);
-			
-			client.on("REQID", () => {
-				client.sendLegacy("SETTINGS", [
-					LEGACY_SERVERVERSION,
-					gameplay.timesync,
-					gameplay.syncconsoles,
-					gameplay.offlineconsoles,
-					gameplay.reviewbattle,
-					gameplay.serversidesave
-				]);
-			});
-			client.on("POLL", () => {
-				client.sendLegacy("POLLRES", [
-					this.clients.size - 1,
-					gameplay.cheatmodallowed,
-					LEGACY_MINVERSION,
-					gameplay.description,
-					LEGACY_SERVERVERSION
-				]);
-				client.kick("poll");
-			});
-
 			client.on("@join", () => this.emit("clientJoined", client));
 			client.on("@close", () => {
 				this.emit("clientRemoved", client);
@@ -208,19 +174,14 @@ export class nServer extends EventEmitter {
 	 * @param {nPlugin} plugin Plugin class
 	 */
 	register(plugin) {
-		try {
-			this.unregister(plugin);
-		} catch (e) {
-			if (!(e instanceof nException)) { throw e }
-		}
 		const inst = new plugin(this);
 		if (!(inst instanceof nPlugin)) {
 			throw new nException("Plugin class must extend nPlugin");
 		}
 		this.setMaxListeners(this.getMaxListeners() + 1);
-		this.on("clientAdded", inst.onClientAdded);
-		this.on("clientJoined", inst.onClientJoined);
-		this.on("clientRemoved", inst.onClientRemoved);
+		this.on("clientAdded", inst.onClientAdded = inst.onClientAdded.bind(inst));
+		this.on("clientJoined", inst.onClientJoined = inst.onClientJoined.bind(inst));
+		this.on("clientRemoved", inst.onClientRemoved = inst.onClientRemoved.bind(inst));
 		this.plugins.add(inst);
 	}
 	/**
@@ -228,22 +189,16 @@ export class nServer extends EventEmitter {
 	 * @param {nPlugin} plugin Plugin class
 	 */
 	unregister(plugin) {
-		let inst;
 		for (const target in this.plugins.values()) {
 			if (target.constructor === plugin) {
-				inst = target;
-				break;
+				target.onDestroy();
+				this.off("clientAdded", target.onClientAdded);
+				this.off("clientJoined", target.onClientJoined);
+				this.off("clientRemoved", target.onClientRemoved);
+				this.setMaxListeners(this.getMaxListeners() - 1);
+				this.plugins.delete(target);
 			}
 		}
-		if (!inst) {
-			throw new nException("Plugin instance not found");
-		}
-		inst.onDestroy();
-		this.off("clientAdded", inst.onClientAdded);
-		this.off("clientJoined", inst.onClientJoined);
-		this.off("clientRemoved", inst.onClientRemoved);
-		this.setMaxListeners(this.getMaxListeners() - 1);
-		this.plugins.delete(inst);
 	}
 }
 export default nServer;
