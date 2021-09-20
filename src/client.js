@@ -34,6 +34,13 @@ export const LEGACY_SEPARATOR4 = "\xFD";
  */
 export class nClient extends EventEmitter {
 	/**
+	 * @prop {Number} id Session ID
+	 * @prop {Number} code Authentication code
+	 * @prop {Boolean} joined Is client playing (false if kicked)
+	 * @prop {Boolean} legacyMode Disable GDTMP-incompatible features
+	 * @prop {Set} mods Set of client mods
+	 * @prop {nPlayerData} data Player game data
+	 *//**
 	 * Client instance connected
 	 * @event nClient#@open
 	 * @prop {WebSocketConnection} socket
@@ -50,12 +57,9 @@ export class nClient extends EventEmitter {
 	 * @prop {Boolean} [isLegacy=true] Is packet a text
 	 * @prop {String|Buffer} data Packet contents
 	 *//**
-	 * @prop {Number} id Session ID
-	 * @prop {Number} code Authentication code
-	 * @prop {Boolean} joined Is client playing (false if kicked)
-	 * @prop {Boolean} legacyMode Disable GDTMP-incompatible features
-	 * @prop {Set} mods Set of client mods
-	 * @prop {nPlayerData} data Player game data
+	 * Client cheat mod enabled
+	 * @event nClient#BADLOSER
+	 * @type {String[]}
 	 *//**
 	 * Client ID request
 	 * @event nClient#REQID
